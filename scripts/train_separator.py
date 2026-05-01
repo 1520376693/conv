@@ -13,7 +13,7 @@ import torch
 from das_sep.data import make_das_mix_dataloader
 from das_sep.models import DASMCConvTasNet
 from das_sep.trainers import SeparatorTrainer
-from das_sep.utils import get_device, load_config, setup_seed
+from das_sep.utils import get_device, load_config, load_model_state, setup_seed
 
 
 def main():
@@ -28,9 +28,18 @@ def main():
     device = get_device(gpu_ids)
     sep_conf = opt["separator"]
     model = DASMCConvTasNet(**sep_conf["net_conf"])
-    ds = sep_conf["datasets"]
-    train_loader = make_das_mix_dataloader(split="train", **ds)
-    val_loader = make_das_mix_dataloader(split="test", **ds)
+    train_conf = sep_conf.get("train", {})
+    init_checkpoint = train_conf.get("init_checkpoint", "")
+    if init_checkpoint:
+        load_model_state(model, init_checkpoint, device, strict=train_conf.get("strict_init", True))
+    ds = dict(sep_conf["datasets"])
+    train_ds = dict(ds)
+    train_ds.pop("val_epoch_length", None)
+    train_loader = make_das_mix_dataloader(split="train", **train_ds)
+    val_ds = dict(ds)
+    if "val_epoch_length" in val_ds:
+        val_ds["epoch_length"] = val_ds.pop("val_epoch_length")
+    val_loader = make_das_mix_dataloader(split="test", **val_ds)
     SeparatorTrainer(model, sep_conf, device).fit(train_loader, val_loader)
 
 

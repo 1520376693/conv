@@ -55,6 +55,7 @@ class SeparatorTrainer:
         self.best_val = float("inf")
         self.best_sisnr = -1e9
         self.start_epoch = 0
+        self.skipped_nonfinite = 0
         resume = self.conf.get("resume", "")
         if resume:
             ckpt = load_model_state(self.model, resume, device, strict=self.conf.get("strict_resume", True))
@@ -82,6 +83,12 @@ class SeparatorTrainer:
                 with torch.amp.autocast("cuda", enabled=self.use_amp):
                     ests = self.model(batch["mix"])
                     loss, avg_sisnr, _ = self._loss(ests, batch)
+                if not torch.isfinite(loss):
+                    self.skipped_nonfinite += 1
+                    self.logger.warning(f"Skip non-finite separator loss. skipped={self.skipped_nonfinite}")
+                    if training:
+                        self.optimizer.zero_grad(set_to_none=True)
+                    continue
                 if training:
                     self.scaler.scale(loss).backward()
                     if self.clip_norm:
@@ -89,8 +96,11 @@ class SeparatorTrainer:
                         torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.clip_norm)
                     self.scaler.step(self.optimizer)
                     self.scaler.update()
-            losses.append(float(loss.detach().cpu()))
-            sisnrs.append(float(avg_sisnr.detach().cpu()))
+            if torch.isfinite(avg_sisnr):
+                losses.append(float(loss.detach().cpu()))
+                sisnrs.append(float(avg_sisnr.detach().cpu()))
+        if not losses:
+            return float("inf"), float("-inf")
         return float(np.mean(losses)), float(np.mean(sisnrs))
 
     def fit(self, train_loader, val_loader):

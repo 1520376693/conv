@@ -26,25 +26,27 @@ def si_snr_pair_single(est: torch.Tensor, ref: torch.Tensor, eps: float = 1e-8) 
 def pairwise_si_snr_global(ests: torch.Tensor, refs: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
     b, k, _, _ = ests.shape
     s = refs.shape[1]
-    e = ests.reshape(b, k, -1)
-    r = refs.reshape(b, s, -1)
+    e = ests.reshape(b, k, -1).float()
+    r = refs.reshape(b, s, -1).float()
     e = e - e.mean(dim=2, keepdim=True)
     r = r - r.mean(dim=2, keepdim=True)
     dot = torch.einsum("bkd,bsd->bks", e, r)
     e_energy = e.pow(2).sum(dim=2).unsqueeze(2) + eps
     r_energy = r.pow(2).sum(dim=2).unsqueeze(1) + eps
-    target = dot.pow(2) / r_energy
+    target = torch.clamp(dot.pow(2) / r_energy, min=eps)
     noise = torch.clamp(e_energy - target, min=eps)
     return 10.0 * torch.log10(target / noise + eps)
 
 
 def pairwise_si_snr_channelwise(ests: torch.Tensor, refs: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
+    ests = ests.float()
+    refs = refs.float()
     e = ests - ests.mean(dim=3, keepdim=True)
     r = refs - refs.mean(dim=3, keepdim=True)
     dot = torch.einsum("bkct,bsct->bksc", e, r)
     e_energy = e.pow(2).sum(dim=3).unsqueeze(2) + eps
     r_energy = r.pow(2).sum(dim=3).unsqueeze(1) + eps
-    target = dot.pow(2) / r_energy
+    target = torch.clamp(dot.pow(2) / r_energy, min=eps)
     noise = torch.clamp(e_energy - target, min=eps)
     return (10.0 * torch.log10(target / noise + eps)).mean(dim=3)
 
@@ -90,8 +92,10 @@ def pit_si_snr_variable_sources(
     if ests.dim() != 4 or refs.dim() != 4:
         raise RuntimeError(f"ests/refs must be [B,K,C,T], got {ests.shape}/{refs.shape}")
     bsz, k, _, _ = ests.shape
-    if refs.shape[:2] != (bsz, k):
+    if refs.shape[0] != bsz:
         raise RuntimeError(f"Source dims mismatch: {ests.shape}/{refs.shape}")
+    if int(n_src.max().item()) > refs.shape[1]:
+        raise RuntimeError(f"n_src exceeds reference sources: n_src={n_src.tolist()}, refs={refs.shape}")
 
     global_score = pairwise_si_snr_global(ests, refs, eps=eps)
     if channel_weight > 0:
