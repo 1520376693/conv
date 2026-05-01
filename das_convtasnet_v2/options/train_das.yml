@@ -1,0 +1,80 @@
+name: DAS_MC_ConvTasNet_Plus
+seed: 2026
+deterministic: false
+
+gpu_ids: [0]
+
+datasets:
+  root: /hy-tmp/DAS-dataset
+  batch_size: 8
+  num_workers: 4
+  chunk_size: 10000
+
+  # 支持2/3源；如果你想实验4源，改 max_sources=4，net_conf.max_sources也要改4。
+  min_sources: 2
+  max_sources: 3
+  two_source_prob: 0.55
+  three_source_prob: 0.45
+
+  # 论文和实验都显示[-0.01,0.01]量级适合Conv-TasNet类分离。
+  amp_range: 0.01
+  use_diff: true
+  smooth_kernel: 1
+
+  # 分离训练建议不把背景当作目标源；背景改为噪声增强。
+  allow_background: false
+  add_background_noise: true
+  background_noise_prob: 0.60
+  background_snr_db: [14.0, 28.0]
+
+  # 快速扩大随机混合空间，通常比只堆epoch更有效。
+  epoch_length: 30000
+  same_class_prob: 0.10
+  gain_range: [0.55, 1.65]
+  max_source_shift: 1200
+  polarity_flip_prob: 0.10
+  add_white_noise_prob: 0.15
+  white_noise_snr_db: [20.0, 35.0]
+
+net_conf:
+  in_channels: 12
+  out_channels: 12
+  N: 256
+  L: 20
+  B: 256
+  H: 512
+  P: 3
+  X: 8
+  R: 4
+  norm: gln
+  max_sources: 3
+  activate: relu
+  causal: false
+  dropout: 0.05
+  use_encoder_relu: true
+  use_spatial_stem: true
+  mixture_consistency: false
+
+train:
+  checkpoint: ./checkpoints/separator_plus
+  optimizer: adamw
+  scheduler: plateau
+  num_epochs: 120
+  clip_norm: 5
+  min_lr: 1.0e-7
+  patience: 6
+  factor: 0.5
+  early_stop: 25
+  use_amp: true
+  resume: ""
+  strict_resume: true
+
+  loss:
+    silence_weight: 0.08
+    channel_weight: 0.35
+    waveform_weight: 0.10
+    mix_consistency_weight: 0.10
+
+optimizer_kwargs:
+  lr: 8.0e-4
+  weight_decay: 1.0e-4

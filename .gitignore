@@ -1,0 +1,42 @@
+# IDE/editor settings
+.idea/
+.vscode/
+
+# Python caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Training outputs and experiment artifacts
+checkpoints/
+results/
+logs/
+runs/
+wandb/
+tensorboard/
+
+# Model weights and generated data
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.mat
+*.npy
+*.npz
+
+# Local datasets
+DAS-dataset/
+../DAS-dataset/
+
+# OS files
+.DS_Store
+Thumbs.db

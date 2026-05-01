@@ -1,0 +1,45 @@
+name: DAS_ResNet_Classifier
+seed: 2026
+deterministic: false
+
+gpu_ids: [0]
+
+datasets:
+  root: /hy-tmp/DAS-dataset
+  batch_size: 64
+  num_workers: 4
+  chunk_size: 10000
+  use_diff: true
+  augment: true
+  balanced: true
+
+  # 分类器要适应“分离后信号”的轻微形变和噪声。
+  aug_gain: [0.8, 1.25]
+  aug_noise_prob: 0.30
+  aug_snr_db: [18.0, 35.0]
+  aug_shift: 800
+  aug_time_mask_prob: 0.20
+  aug_time_mask_width: 600
+  smooth_kernel: 1
+
+net_conf:
+  num_classes: 6
+  dropout: 0.35
+  base_channels: 32
+
+train:
+  checkpoint: ./checkpoints/classifier_plus
+  optimizer: adamw
+  scheduler: plateau
+  num_epochs: 120
+  min_lr: 1.0e-7
+  patience: 8
+  factor: 0.5
+  clip_norm: 5
+  label_smoothing: 0.05
+  resume: ""
+  strict_resume: true
+
+optimizer_kwargs:
+  lr: 8.0e-4
+  weight_decay: 1.0e-4
