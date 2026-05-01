@@ -19,6 +19,7 @@ ENV/
 # Training outputs and experiment artifacts
 checkpoints/
 results/
+outputs/
 logs/
 runs/
 wandb/
