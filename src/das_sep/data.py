@@ -98,6 +98,7 @@ class DASSingleEventDataset(Dataset):
         aug_time_mask_width: int = 600,
         aug_artifact_noise_prob: float = 0.15,
         smooth_kernel: int = 1,
+        max_items: int | None = None,
     ):
         self.root = root
         self.split = split
@@ -113,6 +114,10 @@ class DASSingleEventDataset(Dataset):
         self.aug_artifact_noise_prob = aug_artifact_noise_prob
         self.smooth_kernel = smooth_kernel
         self.items = [(path, label) for label, files in scan_class_files(root, split).items() for path in files]
+        if max_items is not None and max_items > 0:
+            rng = random.Random(2026 if split != "train" else 2027)
+            rng.shuffle(self.items)
+            self.items = self.items[:max_items]
 
     def __len__(self):
         return len(self.items)

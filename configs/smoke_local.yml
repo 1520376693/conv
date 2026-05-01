@@ -82,6 +82,7 @@ classifier:
     aug_time_mask_width: 128
     aug_artifact_noise_prob: 0.1
     smooth_kernel: 1
+    max_items: 24
   net_conf:
     num_classes: 6
     dropout: 0.2
