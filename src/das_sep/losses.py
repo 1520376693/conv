@@ -59,8 +59,8 @@ def stft_mag_loss(est: torch.Tensor, ref: torch.Tensor, fft_sizes=(256, 512, 102
         est = est.unsqueeze(0)
         ref = ref.unsqueeze(0)
     b, s, c, t = est.shape
-    est = est.reshape(b * s * c, t)
-    ref = ref.reshape(b * s * c, t)
+    est = est.reshape(b * s * c, t).float()
+    ref = ref.reshape(b * s * c, t).float()
     total = est.new_tensor(0.0)
     used = 0
     for n_fft in fft_sizes:

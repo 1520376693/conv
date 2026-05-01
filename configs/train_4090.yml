@@ -5,7 +5,7 @@ gpu_ids: [0]
 
 separator:
   datasets:
-    root: /root/DAS-dataset
+    root: /hy-tmp/DAS-dataset
     batch_size: 8
     num_workers: 6
     chunk_size: 10000
@@ -67,7 +67,7 @@ separator:
 
 classifier:
   datasets:
-    root: /root/DAS-dataset
+    root: /hy-tmp/DAS-dataset
     batch_size: 96
     num_workers: 6
     chunk_size: 10000
