@@ -56,6 +56,7 @@ class SeparatorTrainer:
         self.best_sisnr = -1e9
         self.start_epoch = 0
         self.skipped_nonfinite = 0
+        self.monitor = self.conf.get("monitor", "loss").lower()
         resume = self.conf.get("resume", "")
         if resume:
             ckpt = load_model_state(self.model, resume, device, strict=self.conf.get("strict_resume", True))
@@ -115,9 +116,13 @@ class SeparatorTrainer:
                 f"val_loss={val_loss:.4f}, val_si_snr={val_sisnr:.4f}, lr={get_lr(self.optimizer):.3e}"
             )
             save_checkpoint(os.path.join(self.checkpoint_dir, "last.pt"), self.model, self.optimizer, self.scheduler, epoch, {"best_val": self.best_val, "best_sisnr": self.best_sisnr})
-            if val_loss < self.best_val:
+            if self.monitor in {"sisnr", "si_snr", "val_si_snr"}:
+                improved = val_sisnr > self.best_sisnr
+            else:
+                improved = val_loss < self.best_val
+            if improved:
                 self.best_val = val_loss
-                self.best_sisnr = max(self.best_sisnr, val_sisnr)
+                self.best_sisnr = val_sisnr
                 no_improve = 0
                 save_checkpoint(os.path.join(self.checkpoint_dir, "best.pt"), self.model, self.optimizer, self.scheduler, epoch, {"best_val": self.best_val, "best_sisnr": self.best_sisnr})
             else:
