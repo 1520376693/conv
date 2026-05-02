@@ -33,7 +33,7 @@ def pairwise_si_snr_global(ests: torch.Tensor, refs: torch.Tensor, eps: float = 
     dot = torch.einsum("bkd,bsd->bks", e, r)
     e_energy = e.pow(2).sum(dim=2).unsqueeze(2) + eps
     r_energy = r.pow(2).sum(dim=2).unsqueeze(1) + eps
-    target = torch.clamp(dot.pow(2) / r_energy, min=eps)
+    target = dot.pow(2) / r_energy
     noise = torch.clamp(e_energy - target, min=eps)
     return 10.0 * torch.log10(target / noise + eps)
 
@@ -46,7 +46,7 @@ def pairwise_si_snr_channelwise(ests: torch.Tensor, refs: torch.Tensor, eps: flo
     dot = torch.einsum("bkct,bsct->bksc", e, r)
     e_energy = e.pow(2).sum(dim=3).unsqueeze(2) + eps
     r_energy = r.pow(2).sum(dim=3).unsqueeze(1) + eps
-    target = torch.clamp(dot.pow(2) / r_energy, min=eps)
+    target = dot.pow(2) / r_energy
     noise = torch.clamp(e_energy - target, min=eps)
     return (10.0 * torch.log10(target / noise + eps)).mean(dim=3)
 
