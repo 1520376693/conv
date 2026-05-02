@@ -15,6 +15,15 @@ from .preprocess import moving_average_torch, to_cnn_input
 from .utils import ensure_dir, to_device
 
 
+def polarity_invariant_logits(classifier, x: torch.Tensor) -> torch.Tensor:
+    logits_pos = classifier(to_cnn_input(x))
+    logits_neg = classifier(to_cnn_input(-x))
+    prob_pos = torch.softmax(logits_pos, dim=1)
+    prob_neg = torch.softmax(logits_neg, dim=1)
+    use_neg = prob_neg.max(dim=1).values > prob_pos.max(dim=1).values
+    return torch.where(use_neg[:, None], logits_neg, logits_pos)
+
+
 def compute_separator_rows(mix, refs, ests, labels, n_src, best_infos, batch_idx=0):
     rows = []
     for b in range(mix.shape[0]):
@@ -131,7 +140,7 @@ def evaluate_separated_classification(separator, classifier, loader, device, out
                 true = int(batch["labels"][b, ref_idx].item())
                 if true >= 6:
                     continue
-                logits = classifier(to_cnn_input(ests[b, out_idx]).to(device))
+                logits = polarity_invariant_logits(classifier, ests[b, out_idx])
                 y_true.append(true)
                 y_pred.append(int(logits.argmax(dim=1).item()))
                 n_srcs.append(int(batch["n_src"][b].item()))
