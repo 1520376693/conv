@@ -89,6 +89,11 @@ def main():
     parser.add_argument("--train_epoch_length", type=int, default=12000)
     parser.add_argument("--val_epoch_length", type=int, default=3000)
     parser.add_argument("--lr", type=float, default=1.0e-4)
+    parser.add_argument("--train_min_sources", type=int, default=0)
+    parser.add_argument("--train_max_sources", type=int, default=0)
+    parser.add_argument("--train_two_source_prob", type=float, default=-1.0)
+    parser.add_argument("--train_three_source_prob", type=float, default=-1.0)
+    parser.add_argument("--train_same_class_prob", type=float, default=0.0)
     args = parser.parse_args()
 
     opt = load_config(args.config)
@@ -111,7 +116,15 @@ def main():
     ds["batch_size"] = min(int(ds.get("batch_size", 8)), 8)
     train_ds = dict(ds)
     train_ds["epoch_length"] = args.train_epoch_length
-    train_ds["same_class_prob"] = 0.0
+    train_ds["same_class_prob"] = args.train_same_class_prob
+    if args.train_min_sources > 0:
+        train_ds["min_sources"] = args.train_min_sources
+    if args.train_max_sources > 0:
+        train_ds["max_sources"] = args.train_max_sources
+    if args.train_two_source_prob >= 0:
+        train_ds["two_source_prob"] = args.train_two_source_prob
+    if args.train_three_source_prob >= 0:
+        train_ds["three_source_prob"] = args.train_three_source_prob
     val_ds = dict(ds)
     val_ds["epoch_length"] = args.val_epoch_length
     train_loader = make_das_mix_dataloader(split="train", **train_ds)
