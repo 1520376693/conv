@@ -1,0 +1,70 @@
+name: DAS_ConvTasNet_4090_sisnri_v7_hard4src
+seed: 2038
+deterministic: false
+gpu_ids: [0]
+
+separator:
+  datasets:
+    root: /hy-tmp/DAS-dataset
+    batch_size: 6
+    num_workers: 6
+    chunk_size: 10000
+    min_sources: 2
+    max_sources: 4
+    two_source_prob: 0.15
+    three_source_prob: 0.30
+    amp_range: 0.01
+    allow_background: false
+    epoch_length: 18000
+    val_epoch_length: 3600
+    use_diff: true
+    smooth_kernel: 1
+    same_class_prob: 0.10
+    gain_range: [0.60, 1.55]
+    max_source_shift: 1200
+    polarity_flip_prob: 0.06
+    add_background_noise: true
+    background_noise_prob: 0.45
+    background_snr_db: [16.0, 30.0]
+    add_white_noise_prob: 0.06
+    white_noise_snr_db: [24.0, 38.0]
+  net_conf:
+    in_channels: 12
+    out_channels: 12
+    N: 256
+    L: 20
+    B: 256
+    H: 512
+    P: 3
+    X: 8
+    R: 8
+    norm: gln
+    max_sources: 4
+    activate: sigmoid
+    dropout: 0.04
+    spatial_stem: true
+    spatial_depth: 2
+    mixture_consistency: false
+  train:
+    checkpoint: ./checkpoints/separator_sisnri_v7_hard4src
+    init_checkpoint: ./checkpoints/separator_sisnri_v5_r8_standard/best.pt
+    strict_init: true
+    monitor: sisnr
+    optimizer: adamw
+    scheduler: plateau
+    num_epochs: 12
+    clip_norm: 5
+    min_lr: 5.0e-8
+    patience: 4
+    factor: 0.5
+    early_stop: 5
+    use_amp: false
+    loss:
+      silence_weight: 0.03
+      channel_weight: 0.03
+      waveform_weight: 0.010
+      stft_weight: 0.0
+      mix_consistency_weight: 0.010
+    optimizer_kwargs:
+      lr: 2.0e-6
+      weight_decay: 6.0e-5
