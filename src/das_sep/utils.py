@@ -73,9 +73,26 @@ def save_checkpoint(path: str, model, optimizer=None, scheduler=None, epoch: int
     torch.save(state, path)
 
 
-def load_model_state(model, checkpoint_path: str, device: torch.device, strict: bool = True) -> dict:
+def load_model_state(model, checkpoint_path: str, device: torch.device, strict: bool = True, ignore_mismatch: bool = False) -> dict:
     ckpt = torch.load(checkpoint_path, map_location=device)
     state = ckpt["model_state_dict"] if isinstance(ckpt, dict) and "model_state_dict" in ckpt else ckpt
+    if ignore_mismatch:
+        current = model.state_dict()
+        filtered = {}
+        skipped = {}
+        for key, value in state.items():
+            if key in current and current[key].shape == value.shape:
+                filtered[key] = value
+            else:
+                skipped[key] = tuple(value.shape) if hasattr(value, "shape") else "unknown"
+        missing, unexpected = model.load_state_dict(filtered, strict=False)
+        if strict:
+            raise RuntimeError("ignore_mismatch requires strict=False")
+        out = ckpt if isinstance(ckpt, dict) else {"model_state_dict": ckpt}
+        out["skipped_mismatch"] = skipped
+        out["missing_keys"] = missing
+        out["unexpected_keys"] = unexpected
+        return out
     missing, unexpected = model.load_state_dict(state, strict=strict)
     if strict and (missing or unexpected):
         raise RuntimeError(f"Checkpoint mismatch. missing={missing}, unexpected={unexpected}")

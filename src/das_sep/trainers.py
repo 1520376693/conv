@@ -46,17 +46,21 @@ class SeparatorTrainer:
         self.checkpoint_dir = self.conf["checkpoint"]
         ensure_dir(self.checkpoint_dir)
         self.logger = get_logger("separator", os.path.join(self.checkpoint_dir, "train.log"))
+        self.monitor = self.conf.get("monitor", "loss").lower()
+        self.scheduler_on = self.conf.get("scheduler_on", "loss").lower()
         self.optimizer = build_optimizer(self.model, self.conf)
-        self.sched_name, self.scheduler = build_scheduler(self.optimizer, self.conf, mode="min")
+        scheduler_mode = "max" if self.scheduler_on in {"sisnr", "si_snr", "val_si_snr"} else "min"
+        self.sched_name, self.scheduler = build_scheduler(self.optimizer, self.conf, mode=scheduler_mode)
         self.use_amp = self.conf.get("use_amp", True) and device.type == "cuda"
         self.scaler = torch.amp.GradScaler("cuda", enabled=self.use_amp)
         self.clip_norm = self.conf.get("clip_norm", 5)
         self.num_epochs = self.conf.get("num_epochs", 120)
+        self.save_epoch_checkpoints = self.conf.get("save_epoch_checkpoints", False)
+        self.epoch_checkpoint_every = max(1, int(self.conf.get("epoch_checkpoint_every", 1)))
         self.best_val = float("inf")
         self.best_sisnr = -1e9
         self.start_epoch = 0
         self.skipped_nonfinite = 0
-        self.monitor = self.conf.get("monitor", "loss").lower()
         resume = self.conf.get("resume", "")
         if resume:
             ckpt = load_model_state(self.model, resume, device, strict=self.conf.get("strict_resume", True))
@@ -110,12 +114,22 @@ class SeparatorTrainer:
         for epoch in range(self.start_epoch + 1, self.num_epochs + 1):
             train_loss, train_sisnr = self.run_one_epoch(train_loader, True)
             val_loss, val_sisnr = self.run_one_epoch(val_loader, False)
-            self.scheduler.step(val_loss) if self.sched_name == "plateau" else self.scheduler.step()
+            sched_metric = val_sisnr if self.scheduler_on in {"sisnr", "si_snr", "val_si_snr"} else val_loss
+            self.scheduler.step(sched_metric) if self.sched_name == "plateau" else self.scheduler.step()
             self.logger.info(
                 f"Epoch {epoch:03d}: train_loss={train_loss:.4f}, train_si_snr={train_sisnr:.4f}, "
                 f"val_loss={val_loss:.4f}, val_si_snr={val_sisnr:.4f}, lr={get_lr(self.optimizer):.3e}"
             )
             save_checkpoint(os.path.join(self.checkpoint_dir, "last.pt"), self.model, self.optimizer, self.scheduler, epoch, {"best_val": self.best_val, "best_sisnr": self.best_sisnr})
+            if self.save_epoch_checkpoints and epoch % self.epoch_checkpoint_every == 0:
+                save_checkpoint(
+                    os.path.join(self.checkpoint_dir, f"epoch_{epoch:03d}.pt"),
+                    self.model,
+                    self.optimizer,
+                    self.scheduler,
+                    epoch,
+                    {"best_val": self.best_val, "best_sisnr": self.best_sisnr},
+                )
             if self.monitor in {"sisnr", "si_snr", "val_si_snr"}:
                 improved = val_sisnr > self.best_sisnr
             else:

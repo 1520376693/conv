@@ -271,7 +271,17 @@ class DASRandomMixDataset(Dataset):
         }
 
 
-def make_single_event_dataloader(root: str, split: str, batch_size=64, num_workers=4, balanced=True, **kwargs):
+def make_single_event_dataloader(
+    root: str,
+    split: str,
+    batch_size=64,
+    num_workers=4,
+    balanced=True,
+    pin_memory: bool | None = None,
+    persistent_workers: bool | None = None,
+    prefetch_factor: int | None = None,
+    **kwargs,
+):
     dataset = DASSingleEventDataset(root=root, split=split, **kwargs)
     sampler = None
     shuffle = split == "train"
@@ -281,26 +291,45 @@ def make_single_event_dataloader(root: str, split: str, batch_size=64, num_worke
         weights = (1.0 / (class_count + 1e-8))[labels]
         sampler = WeightedRandomSampler(weights, num_samples=len(weights), replacement=True)
         shuffle = False
+    loader_kwargs = {
+        "batch_size": batch_size,
+        "shuffle": shuffle,
+        "sampler": sampler,
+        "num_workers": num_workers,
+        "pin_memory": torch.cuda.is_available() if pin_memory is None else pin_memory,
+        "drop_last": False,
+        "persistent_workers": (num_workers > 0) if persistent_workers is None else persistent_workers,
+    }
+    if num_workers > 0 and prefetch_factor is not None:
+        loader_kwargs["prefetch_factor"] = prefetch_factor
     return DataLoader(
         dataset,
-        batch_size=batch_size,
-        shuffle=shuffle,
-        sampler=sampler,
-        num_workers=num_workers,
-        pin_memory=torch.cuda.is_available(),
-        drop_last=False,
-        persistent_workers=(num_workers > 0),
+        **loader_kwargs,
     )
 
 
-def make_das_mix_dataloader(root: str, split: str, batch_size=4, num_workers=4, **kwargs):
+def make_das_mix_dataloader(
+    root: str,
+    split: str,
+    batch_size=4,
+    num_workers=4,
+    pin_memory: bool | None = None,
+    persistent_workers: bool | None = None,
+    prefetch_factor: int | None = None,
+    **kwargs,
+):
     dataset = DASRandomMixDataset(root=root, split=split, **kwargs)
+    loader_kwargs = {
+        "batch_size": batch_size,
+        "shuffle": (split == "train"),
+        "num_workers": num_workers,
+        "pin_memory": torch.cuda.is_available() if pin_memory is None else pin_memory,
+        "drop_last": (split == "train"),
+        "persistent_workers": (num_workers > 0) if persistent_workers is None else persistent_workers,
+    }
+    if num_workers > 0 and prefetch_factor is not None:
+        loader_kwargs["prefetch_factor"] = prefetch_factor
     return DataLoader(
         dataset,
-        batch_size=batch_size,
-        shuffle=(split == "train"),
-        num_workers=num_workers,
-        pin_memory=torch.cuda.is_available(),
-        drop_last=(split == "train"),
-        persistent_workers=(num_workers > 0),
+        **loader_kwargs,
     )

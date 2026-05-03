@@ -31,7 +31,13 @@ def main():
     train_conf = sep_conf.get("train", {})
     init_checkpoint = train_conf.get("init_checkpoint", "")
     if init_checkpoint:
-        load_model_state(model, init_checkpoint, device, strict=train_conf.get("strict_init", True))
+        load_model_state(
+            model,
+            init_checkpoint,
+            device,
+            strict=train_conf.get("strict_init", True),
+            ignore_mismatch=train_conf.get("ignore_init_mismatch", False),
+        )
     ds = dict(sep_conf["datasets"])
     train_ds = dict(ds)
     train_ds.pop("val_epoch_length", None)
