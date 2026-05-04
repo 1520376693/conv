@@ -1,0 +1,76 @@
+name: DAS_ConvTasNet_4090_sisnri_v14_v13_micro_polish
+seed: 2046
+deterministic: false
+gpu_ids: [0]
+
+separator:
+  datasets:
+    root: /hy-tmp/DAS-dataset
+    batch_size: 20
+    num_workers: 12
+    pin_memory: true
+    persistent_workers: true
+    prefetch_factor: 4
+    chunk_size: 10000
+    min_sources: 2
+    max_sources: 4
+    two_source_prob: 0.08
+    three_source_prob: 0.18
+    amp_range: 0.01
+    allow_background: false
+    epoch_length: 18000
+    val_epoch_length: 5000
+    use_diff: true
+    smooth_kernel: 1
+    same_class_prob: 0.05
+    gain_range: [0.70, 1.35]
+    max_source_shift: 700
+    polarity_flip_prob: 0.03
+    add_background_noise: true
+    background_noise_prob: 0.15
+    background_snr_db: [24.0, 40.0]
+    add_white_noise_prob: 0.01
+    white_noise_snr_db: [32.0, 46.0]
+  net_conf:
+    in_channels: 12
+    out_channels: 12
+    N: 256
+    L: 20
+    B: 256
+    H: 512
+    P: 3
+    X: 8
+    R: 8
+    norm: gln
+    max_sources: 4
+    activate: sigmoid
+    dropout: 0.035
+    spatial_stem: true
+    spatial_depth: 2
+    mixture_consistency: false
+  train:
+    checkpoint: ./checkpoints/separator_sisnri_v14_v13_micro_polish
+    init_checkpoint: ./checkpoints/separator_sisnri_v13_clean4src_polish/metric_best.pt
+    strict_init: true
+    monitor: sisnr
+    scheduler_on: sisnr
+    save_epoch_checkpoints: true
+    epoch_checkpoint_every: 2
+    optimizer: adamw
+    scheduler: plateau
+    num_epochs: 6
+    clip_norm: 5
+    min_lr: 3.0e-8
+    patience: 2
+    factor: 0.5
+    early_stop: 3
+    use_amp: true
+    loss:
+      silence_weight: 0.020
+      channel_weight: 0.020
+      waveform_weight: 0.006
+      stft_weight: 0.0
+      mix_consistency_weight: 0.006
+    optimizer_kwargs:
+      lr: 1.5e-7
+      weight_decay: 4.0e-5
