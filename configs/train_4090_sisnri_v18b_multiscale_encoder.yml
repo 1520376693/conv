@@ -1,0 +1,99 @@
+name: DAS_ConvTasNet_4090_sisnri_v18b_multiscale_encoder
+seed: 2061
+deterministic: false
+gpu_ids: [0]
+
+separator:
+  datasets:
+    root: /hy-tmp/DAS-dataset
+    batch_size: 12
+    num_workers: 12
+    pin_memory: true
+    persistent_workers: true
+    prefetch_factor: 4
+    chunk_size: 10000
+    min_sources: 2
+    max_sources: 4
+    two_source_prob: 0.08
+    three_source_prob: 0.18
+    amp_range: 0.01
+    allow_background: false
+    epoch_length: 18000
+    val_epoch_length: 5000
+    use_diff: true
+    smooth_kernel: 1
+    same_class_prob: 0.06
+    gain_range: [0.70, 1.35]
+    max_source_shift: 750
+    polarity_flip_prob: 0.03
+    add_background_noise: true
+    background_noise_prob: 0.15
+    background_snr_db: [24.0, 40.0]
+    add_white_noise_prob: 0.01
+    white_noise_snr_db: [32.0, 46.0]
+    spatial_mix_prob: 0.30
+    channel_delay_max: 8
+    channel_delay_slope_range: [-0.9, 0.9]
+    per_channel_gain_range: [0.90, 1.10]
+    spatial_center_width_range: [2.5, 7.0]
+    spatial_blend_range: [0.15, 0.55]
+    hard_profile_prob: 0.40
+    hard_two_source_prob: 0.04
+    hard_three_source_prob: 0.12
+    hard_same_class_prob: 0.18
+    hard_gain_range: [0.65, 1.48]
+    hard_max_source_shift: 700
+    hard_polarity_flip_prob: 0.03
+    hard_background_noise_prob: 0.12
+    hard_spatial_mix_prob: 0.55
+    hard_channel_delay_max: 10
+    hard_channel_delay_slope_range: [-1.2, 1.2]
+    hard_per_channel_gain_range: [0.86, 1.14]
+    hard_spatial_center_width_range: [1.8, 5.5]
+    hard_spatial_blend_range: [0.30, 0.80]
+  net_conf:
+    in_channels: 12
+    out_channels: 12
+    N: 192
+    L: 20
+    B: 256
+    H: 512
+    P: 3
+    X: 8
+    R: 8
+    norm: gln
+    max_sources: 4
+    activate: sigmoid
+    dropout: 0.035
+    spatial_stem: true
+    spatial_stem_type: 1d
+    spatial_depth: 2
+    mixture_consistency: false
+    encoder_scales: [10, 20, 40]
+  train:
+    checkpoint: ./checkpoints/separator_sisnri_v18b_multiscale_encoder
+    init_checkpoint: ./checkpoints/separator_sisnri_v18a_standard_hard_balance/metric_best.pt
+    strict_init: false
+    ignore_init_mismatch: true
+    monitor: sisnr
+    scheduler_on: sisnr
+    save_epoch_checkpoints: true
+    epoch_checkpoint_every: 1
+    optimizer: adamw
+    scheduler: plateau
+    num_epochs: 10
+    clip_norm: 5
+    min_lr: 3.0e-8
+    patience: 2
+    factor: 0.5
+    early_stop: 4
+    use_amp: true
+    loss:
+      silence_weight: 0.020
+      channel_weight: 0.020
+      waveform_weight: 0.006
+      stft_weight: 0.0
+      mix_consistency_weight: 0.006
+    optimizer_kwargs:
+      lr: 5.0e-7
+      weight_decay: 4.0e-5

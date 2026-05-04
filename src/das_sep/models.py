@@ -157,6 +157,7 @@ class DASMCConvTasNet(nn.Module):
         spatial_stem_type="1d",
         spatial_depth=2,
         mixture_consistency=False,
+        encoder_scales=None,
     ):
         super().__init__()
         if L % 2 != 0:
@@ -168,6 +169,16 @@ class DASMCConvTasNet(nn.Module):
         self.activate = activate.lower()
         self.use_encoder_relu = use_encoder_relu
         self.mixture_consistency = mixture_consistency
+        scales = [int(scale) for scale in (encoder_scales or [])]
+        if scales:
+            if any(scale % 2 != 0 or scale <= 0 for scale in scales):
+                raise ValueError("encoder_scales must contain positive even kernel sizes")
+            scales = [L] + [scale for scale in scales if scale != L]
+        else:
+            scales = [L]
+        self.encoder_scales = scales
+        self.multiscale_encoder = len(scales) > 1
+        self.encoder_dim = N * len(scales)
 
         stem_type = str(spatial_stem_type).lower()
         if not spatial_stem:
@@ -179,8 +190,20 @@ class DASMCConvTasNet(nn.Module):
         else:
             raise ValueError("spatial_stem_type must be 1d or 2d")
         self.encoder = nn.Conv1d(in_channels, N, kernel_size=L, stride=L // 2, bias=False)
-        self.layer_norm = select_norm("cln", N)
-        self.bottleneck = nn.Conv1d(N, B, 1, bias=False)
+        extra_encoders = []
+        extra_decoders = []
+        for scale in scales[1:]:
+            padding = max(0, (scale - L) // 2)
+            extra_encoders.append(
+                nn.Conv1d(in_channels, N, kernel_size=scale, stride=L // 2, padding=padding, bias=False)
+            )
+            extra_decoders.append(
+                nn.ConvTranspose1d(N, out_channels, kernel_size=scale, stride=L // 2, padding=padding, bias=False)
+            )
+        self.extra_encoders = nn.ModuleList(extra_encoders)
+        self.extra_decoders = nn.ModuleList(extra_decoders)
+        self.layer_norm = select_norm("cln", self.encoder_dim)
+        self.bottleneck = nn.Conv1d(self.encoder_dim, B, 1, bias=False)
         self.separation = nn.ModuleList(
             [
                 TemporalBlockWithSkip(B, H, P, dilation=2**i, norm=norm, dropout=dropout)
@@ -190,11 +213,43 @@ class DASMCConvTasNet(nn.Module):
         )
         self.mask_prelu = nn.PReLU()
         self.mask_norm = select_norm(norm, B)
-        self.gen_masks = nn.Conv1d(B, max_sources * N, 1)
+        self.gen_masks = nn.Conv1d(B, max_sources * self.encoder_dim, 1)
         self.decoder = nn.ConvTranspose1d(N, out_channels, kernel_size=L, stride=L // 2, bias=False)
 
         if self.activate not in {"relu", "sigmoid", "softmax"}:
             raise ValueError("activate must be relu, sigmoid, or softmax")
+
+    @staticmethod
+    def _align_frames(x: torch.Tensor, target_frames: int) -> torch.Tensor:
+        if x.shape[-1] == target_frames:
+            return x
+        return F.interpolate(x, size=target_frames, mode="linear", align_corners=False)
+
+    @staticmethod
+    def _crop_or_pad_time(x: torch.Tensor, target_t: int) -> torch.Tensor:
+        if x.shape[-1] > target_t:
+            return x[..., :target_t]
+        if x.shape[-1] < target_t:
+            return F.pad(x, (0, target_t - x.shape[-1]))
+        return x
+
+    def _encode(self, x: torch.Tensor) -> torch.Tensor:
+        base = self.encoder(x)
+        target_frames = base.shape[-1]
+        features = [base]
+        for encoder in self.extra_encoders:
+            features.append(self._align_frames(encoder(x), target_frames))
+        w = torch.cat(features, dim=1) if len(features) > 1 else base
+        return F.relu(w) if self.use_encoder_relu else w
+
+    def _decode_source(self, masked_features: torch.Tensor, target_t: int) -> torch.Tensor:
+        if not self.multiscale_encoder:
+            return self._crop_or_pad_time(self.decoder(masked_features), target_t)
+        chunks = masked_features.split(self.N, dim=1)
+        estimates = [self._crop_or_pad_time(self.decoder(chunks[0]), target_t)]
+        for chunk, decoder in zip(chunks[1:], self.extra_decoders):
+            estimates.append(self._crop_or_pad_time(decoder(chunk), target_t))
+        return torch.stack(estimates, dim=0).mean(dim=0)
 
     def _activate_masks(self, masks: torch.Tensor) -> torch.Tensor:
         if self.activate == "relu":
@@ -211,25 +266,18 @@ class DASMCConvTasNet(nn.Module):
             raise RuntimeError(f"Expected {self.in_channels} channels, got {channels}")
         mix = x
         x = self.spatial_stem(x)
-        w = self.encoder(x)
-        if self.use_encoder_relu:
-            w = F.relu(w)
+        w = self._encode(x)
         y = self.bottleneck(self.layer_norm(w))
         skip_sum = None
         for block in self.separation:
             y, skip = block(y)
             skip_sum = skip if skip_sum is None else skip_sum + skip
         m = self.mask_norm(self.mask_prelu(skip_sum))
-        masks = self.gen_masks(m).view(bsz, self.max_sources, self.N, -1)
+        masks = self.gen_masks(m).view(bsz, self.max_sources, self.encoder_dim, -1)
         masks = self._activate_masks(masks)
         ests = []
         for k in range(self.max_sources):
-            est = self.decoder(w * masks[:, k])
-            if est.shape[-1] > t:
-                est = est[..., :t]
-            elif est.shape[-1] < t:
-                est = F.pad(est, (0, t - est.shape[-1]))
-            ests.append(est)
+            ests.append(self._decode_source(w * masks[:, k], t))
         ests = torch.stack(ests, dim=1)
         if self.mixture_consistency:
             ests = ests + (mix.unsqueeze(1) - ests.sum(dim=1, keepdim=True)) / float(self.max_sources)

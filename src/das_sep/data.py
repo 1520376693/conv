@@ -222,6 +222,20 @@ class DASRandomMixDataset(Dataset):
         per_channel_gain_range=(1.0, 1.0),
         spatial_center_width_range=(12.0, 12.0),
         spatial_blend_range=(0.0, 0.0),
+        hard_profile_prob: float = 0.0,
+        hard_two_source_prob: float | None = None,
+        hard_three_source_prob: float | None = None,
+        hard_same_class_prob: float | None = None,
+        hard_gain_range=None,
+        hard_max_source_shift: int | None = None,
+        hard_polarity_flip_prob: float | None = None,
+        hard_background_noise_prob: float | None = None,
+        hard_spatial_mix_prob: float | None = None,
+        hard_channel_delay_max: int | None = None,
+        hard_channel_delay_slope_range=None,
+        hard_per_channel_gain_range=None,
+        hard_spatial_center_width_range=None,
+        hard_spatial_blend_range=None,
     ):
         self.root = root
         self.split = split
@@ -251,6 +265,30 @@ class DASRandomMixDataset(Dataset):
         self.per_channel_gain_range = tuple(per_channel_gain_range)
         self.spatial_center_width_range = tuple(spatial_center_width_range)
         self.spatial_blend_range = tuple(spatial_blend_range)
+        self.hard_profile_prob = hard_profile_prob if split == "train" else 0.0
+        self.hard_profile = {
+            "two_source_prob": self.two_source_prob if hard_two_source_prob is None else hard_two_source_prob,
+            "three_source_prob": self.three_source_prob if hard_three_source_prob is None else hard_three_source_prob,
+            "same_class_prob": self.same_class_prob if hard_same_class_prob is None else hard_same_class_prob,
+            "gain_range": self.gain_range if hard_gain_range is None else tuple(hard_gain_range),
+            "max_source_shift": self.max_source_shift if hard_max_source_shift is None else int(hard_max_source_shift),
+            "polarity_flip_prob": self.polarity_flip_prob if hard_polarity_flip_prob is None else hard_polarity_flip_prob,
+            "background_noise_prob": self.background_noise_prob if hard_background_noise_prob is None else hard_background_noise_prob,
+            "spatial_mix_prob": self.spatial_mix_prob if hard_spatial_mix_prob is None else hard_spatial_mix_prob,
+            "channel_delay_max": self.channel_delay_max if hard_channel_delay_max is None else int(hard_channel_delay_max),
+            "channel_delay_slope_range": self.channel_delay_slope_range
+            if hard_channel_delay_slope_range is None
+            else tuple(hard_channel_delay_slope_range),
+            "per_channel_gain_range": self.per_channel_gain_range
+            if hard_per_channel_gain_range is None
+            else tuple(hard_per_channel_gain_range),
+            "spatial_center_width_range": self.spatial_center_width_range
+            if hard_spatial_center_width_range is None
+            else tuple(hard_spatial_center_width_range),
+            "spatial_blend_range": self.spatial_blend_range
+            if hard_spatial_blend_range is None
+            else tuple(hard_spatial_blend_range),
+        }
         self.class_to_files = scan_class_files(root, split)
         default_length = sum(len(v) for v in self.class_to_files.values())
         self.epoch_length = epoch_length or (default_length * 2 if split == "train" else default_length)
@@ -258,18 +296,20 @@ class DASRandomMixDataset(Dataset):
     def __len__(self):
         return self.epoch_length
 
-    def _choose_n_src(self) -> int:
+    def _choose_n_src(self, profile: Dict[str, Any] | None = None) -> int:
+        two_source_prob = self.two_source_prob if profile is None else profile["two_source_prob"]
+        three_source_prob = self.three_source_prob if profile is None else profile["three_source_prob"]
         if self.min_sources == self.max_sources:
             return self.max_sources
         if self.min_sources == 2 and self.max_sources >= 4:
             r = random.random()
-            if r < self.two_source_prob:
+            if r < two_source_prob:
                 return 2
-            if r < self.two_source_prob + self.three_source_prob:
+            if r < two_source_prob + three_source_prob:
                 return 3
             return 4
         if self.min_sources == 2 and self.max_sources == 3:
-            return 2 if random.random() < self.two_source_prob else 3
+            return 2 if random.random() < two_source_prob else 3
         return random.randint(self.min_sources, self.max_sources)
 
     def _load_signal(self, label: int) -> torch.Tensor:
@@ -283,21 +323,27 @@ class DASRandomMixDataset(Dataset):
         )
         return crop_or_pad(sig, self.chunk_size, random_crop=(self.split == "train"))
 
-    def _choose_labels(self, n_src: int) -> List[int]:
+    def _choose_labels(self, n_src: int, profile: Dict[str, Any] | None = None) -> List[int]:
+        same_class_prob = self.same_class_prob if profile is None else profile["same_class_prob"]
         labels = list(range(len(CLASS_NAMES)))
         if not self.allow_background:
             labels = labels[1:]
-        if random.random() < self.same_class_prob:
+        if random.random() < same_class_prob:
             return random.choices(labels, k=n_src)
         if n_src <= len(labels):
             return random.sample(labels, n_src)
         return random.choices(labels, k=n_src)
 
-    def _random_spatial_params(self, channels: int) -> Dict[str, Any]:
-        max_delay = max(0, self.channel_delay_max)
+    def _random_spatial_params(self, channels: int, profile: Dict[str, Any] | None = None) -> Dict[str, Any]:
+        channel_delay_max = self.channel_delay_max if profile is None else profile["channel_delay_max"]
+        channel_delay_slope_range = self.channel_delay_slope_range if profile is None else profile["channel_delay_slope_range"]
+        per_channel_gain_range = self.per_channel_gain_range if profile is None else profile["per_channel_gain_range"]
+        spatial_center_width_range = self.spatial_center_width_range if profile is None else profile["spatial_center_width_range"]
+        spatial_blend_range = self.spatial_blend_range if profile is None else profile["spatial_blend_range"]
+        max_delay = max(0, channel_delay_max)
         if max_delay > 0:
             mid = (channels - 1) / 2.0
-            slope = random.uniform(*self.channel_delay_slope_range)
+            slope = random.uniform(*channel_delay_slope_range)
             offset = random.uniform(-max_delay, max_delay)
             channel_shifts = [
                 max(-max_delay, min(max_delay, int(round(offset + (ch - mid) * slope))))
@@ -305,40 +351,45 @@ class DASRandomMixDataset(Dataset):
             ]
         else:
             channel_shifts = [0 for _ in range(channels)]
-        gain_low, gain_high = self.per_channel_gain_range
+        gain_low, gain_high = per_channel_gain_range
         if gain_low == gain_high == 1.0:
             per_channel_gains = [1.0 for _ in range(channels)]
         else:
             per_channel_gains = [random.uniform(gain_low, gain_high) for _ in range(channels)]
-        width = random.uniform(*self.spatial_center_width_range)
+        width = random.uniform(*spatial_center_width_range)
         return {
             "channel_shifts": channel_shifts,
             "per_channel_gains": per_channel_gains,
             "spatial_center": random.uniform(0.0, float(channels - 1)),
             "spatial_width": width,
-            "spatial_blend": random.uniform(*self.spatial_blend_range),
+            "spatial_blend": random.uniform(*spatial_blend_range),
         }
 
-    def _maybe_apply_spatial_mix(self, sig: torch.Tensor) -> torch.Tensor:
-        if self.spatial_mix_prob <= 0 or random.random() >= self.spatial_mix_prob:
+    def _maybe_apply_spatial_mix(self, sig: torch.Tensor, profile: Dict[str, Any] | None = None) -> torch.Tensor:
+        spatial_mix_prob = self.spatial_mix_prob if profile is None else profile["spatial_mix_prob"]
+        if spatial_mix_prob <= 0 or random.random() >= spatial_mix_prob:
             return sig
-        return apply_spatial_mix_params(sig, self._random_spatial_params(sig.shape[0]))
+        return apply_spatial_mix_params(sig, self._random_spatial_params(sig.shape[0], profile))
 
     def __getitem__(self, index):
         if self.deterministic:
             random.seed(index)
             torch.manual_seed(index)
-        n_src = self._choose_n_src()
-        labels = self._choose_labels(n_src)
+        profile = self.hard_profile if random.random() < self.hard_profile_prob else None
+        n_src = self._choose_n_src(profile)
+        labels = self._choose_labels(n_src, profile)
+        gain_range = self.gain_range if profile is None else profile["gain_range"]
+        max_source_shift = self.max_source_shift if profile is None else profile["max_source_shift"]
+        polarity_flip_prob = self.polarity_flip_prob if profile is None else profile["polarity_flip_prob"]
         refs, out_labels = [], []
         for label in labels:
             sig = self._load_signal(label)
             if self.split == "train":
-                sig = random_shift_zero(sig, self.max_source_shift)
-                sig = sig * random.uniform(*self.gain_range)
-                if random.random() < self.polarity_flip_prob:
+                sig = random_shift_zero(sig, max_source_shift)
+                sig = sig * random.uniform(*gain_range)
+                if random.random() < polarity_flip_prob:
                     sig = -sig
-                sig = self._maybe_apply_spatial_mix(sig)
+                sig = self._maybe_apply_spatial_mix(sig, profile)
             refs.append(sig)
             out_labels.append(label)
         while len(refs) < self.max_sources:
@@ -346,7 +397,8 @@ class DASRandomMixDataset(Dataset):
             out_labels.append(EMPTY_LABEL)
         refs = torch.stack(refs, dim=0)
         mix = refs[:n_src].sum(dim=0)
-        if self.add_background_noise and random.random() < self.background_noise_prob:
+        background_noise_prob = self.background_noise_prob if profile is None else profile["background_noise_prob"]
+        if self.add_background_noise and random.random() < background_noise_prob:
             bg = self._load_signal(0)
             snr_db = random.uniform(*self.background_snr_db)
             scale = torch.sqrt(mix.pow(2).mean() / (10.0 ** (snr_db / 10.0)) / (bg.pow(2).mean() + 1e-8))
