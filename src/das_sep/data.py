@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import csv
+import json
 import os
 import random
 from dataclasses import dataclass
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Tuple
 
 import torch
 from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
@@ -44,6 +46,10 @@ def random_shift_zero(x: torch.Tensor, max_shift: int) -> torch.Tensor:
     if max_shift <= 0:
         return x
     shift = random.randint(-max_shift, max_shift)
+    return shift_zero(x, shift)
+
+
+def shift_zero(x: torch.Tensor, shift: int) -> torch.Tensor:
     if shift == 0:
         return x
     y = torch.zeros_like(x)
@@ -52,6 +58,47 @@ def random_shift_zero(x: torch.Tensor, max_shift: int) -> torch.Tensor:
     else:
         y[:, :shift] = x[:, -shift:]
     return y
+
+
+def channel_shift_zero(x: torch.Tensor, shifts: List[int]) -> torch.Tensor:
+    if not shifts or all(int(shift) == 0 for shift in shifts):
+        return x
+    y = torch.zeros_like(x)
+    channels = min(x.shape[0], len(shifts))
+    for ch in range(channels):
+        shift = int(shifts[ch])
+        if shift == 0:
+            y[ch] = x[ch]
+        elif shift > 0:
+            y[ch, shift:] = x[ch, :-shift]
+        else:
+            y[ch, :shift] = x[ch, -shift:]
+    if channels < x.shape[0]:
+        y[channels:] = x[channels:]
+    return y
+
+
+def apply_spatial_mix_params(x: torch.Tensor, params: Dict[str, Any]) -> torch.Tensor:
+    shifts = [int(v) for v in params.get("channel_shifts", [])]
+    if shifts:
+        x = channel_shift_zero(x, shifts)
+    gains = params.get("per_channel_gains", [])
+    if gains:
+        gain_tensor = torch.as_tensor(gains[: x.shape[0]], dtype=x.dtype, device=x.device)
+        if gain_tensor.numel() < x.shape[0]:
+            pad = torch.ones(x.shape[0] - gain_tensor.numel(), dtype=x.dtype, device=x.device)
+            gain_tensor = torch.cat([gain_tensor, pad], dim=0)
+        x = x * gain_tensor[:, None]
+    blend = float(params.get("spatial_blend", 0.0))
+    if blend > 0:
+        center = float(params.get("spatial_center", (x.shape[0] - 1) / 2.0))
+        width = max(float(params.get("spatial_width", x.shape[0])), 1e-3)
+        idx = torch.arange(x.shape[0], dtype=x.dtype, device=x.device)
+        profile = torch.exp(-0.5 * ((idx - center) / width).pow(2))
+        profile = profile / profile.max().clamp_min(1e-6)
+        weights = (1.0 - blend) + blend * profile
+        x = x * weights[:, None]
+    return x
 
 
 def add_white_noise(x: torch.Tensor, snr_db_range: Tuple[float, float]) -> torch.Tensor:
@@ -169,6 +216,12 @@ class DASRandomMixDataset(Dataset):
         add_white_noise_prob: float = 0.15,
         white_noise_snr_db=(20.0, 35.0),
         smooth_kernel: int = 1,
+        spatial_mix_prob: float = 0.0,
+        channel_delay_max: int = 0,
+        channel_delay_slope_range=(0.0, 0.0),
+        per_channel_gain_range=(1.0, 1.0),
+        spatial_center_width_range=(12.0, 12.0),
+        spatial_blend_range=(0.0, 0.0),
     ):
         self.root = root
         self.split = split
@@ -192,6 +245,12 @@ class DASRandomMixDataset(Dataset):
         self.add_white_noise_prob = add_white_noise_prob
         self.white_noise_snr_db = tuple(white_noise_snr_db)
         self.smooth_kernel = smooth_kernel
+        self.spatial_mix_prob = spatial_mix_prob if split == "train" else 0.0
+        self.channel_delay_max = int(channel_delay_max)
+        self.channel_delay_slope_range = tuple(channel_delay_slope_range)
+        self.per_channel_gain_range = tuple(per_channel_gain_range)
+        self.spatial_center_width_range = tuple(spatial_center_width_range)
+        self.spatial_blend_range = tuple(spatial_blend_range)
         self.class_to_files = scan_class_files(root, split)
         default_length = sum(len(v) for v in self.class_to_files.values())
         self.epoch_length = epoch_length or (default_length * 2 if split == "train" else default_length)
@@ -234,6 +293,37 @@ class DASRandomMixDataset(Dataset):
             return random.sample(labels, n_src)
         return random.choices(labels, k=n_src)
 
+    def _random_spatial_params(self, channels: int) -> Dict[str, Any]:
+        max_delay = max(0, self.channel_delay_max)
+        if max_delay > 0:
+            mid = (channels - 1) / 2.0
+            slope = random.uniform(*self.channel_delay_slope_range)
+            offset = random.uniform(-max_delay, max_delay)
+            channel_shifts = [
+                max(-max_delay, min(max_delay, int(round(offset + (ch - mid) * slope))))
+                for ch in range(channels)
+            ]
+        else:
+            channel_shifts = [0 for _ in range(channels)]
+        gain_low, gain_high = self.per_channel_gain_range
+        if gain_low == gain_high == 1.0:
+            per_channel_gains = [1.0 for _ in range(channels)]
+        else:
+            per_channel_gains = [random.uniform(gain_low, gain_high) for _ in range(channels)]
+        width = random.uniform(*self.spatial_center_width_range)
+        return {
+            "channel_shifts": channel_shifts,
+            "per_channel_gains": per_channel_gains,
+            "spatial_center": random.uniform(0.0, float(channels - 1)),
+            "spatial_width": width,
+            "spatial_blend": random.uniform(*self.spatial_blend_range),
+        }
+
+    def _maybe_apply_spatial_mix(self, sig: torch.Tensor) -> torch.Tensor:
+        if self.spatial_mix_prob <= 0 or random.random() >= self.spatial_mix_prob:
+            return sig
+        return apply_spatial_mix_params(sig, self._random_spatial_params(sig.shape[0]))
+
     def __getitem__(self, index):
         if self.deterministic:
             random.seed(index)
@@ -248,6 +338,7 @@ class DASRandomMixDataset(Dataset):
                 sig = sig * random.uniform(*self.gain_range)
                 if random.random() < self.polarity_flip_prob:
                     sig = -sig
+                sig = self._maybe_apply_spatial_mix(sig)
             refs.append(sig)
             out_labels.append(label)
         while len(refs) < self.max_sources:
@@ -262,6 +353,92 @@ class DASRandomMixDataset(Dataset):
             mix = mix + bg * scale
         if self.split == "train" and random.random() < self.add_white_noise_prob:
             mix = add_white_noise(mix, self.white_noise_snr_db)
+        scale = self.amp_range / (mix.abs().max() + 1e-8)
+        return {
+            "mix": (mix * scale).float(),
+            "ref": (refs * scale).float(),
+            "labels": torch.tensor(out_labels).long(),
+            "n_src": torch.tensor(n_src).long(),
+        }
+
+
+class DASManifestMixDataset(Dataset):
+    def __init__(
+        self,
+        root: str,
+        manifest_csv: str,
+        chunk_size: int = 10000,
+        max_sources: int = 4,
+        amp_range: float = 0.01,
+        use_diff: bool = True,
+        smooth_kernel: int = 1,
+    ):
+        self.root = root
+        self.manifest_csv = manifest_csv
+        self.chunk_size = chunk_size
+        self.max_sources = max_sources
+        self.amp_range = amp_range
+        self.use_diff = use_diff
+        self.smooth_kernel = smooth_kernel
+        with open(manifest_csv, newline="", encoding="utf-8") as f:
+            self.rows = list(csv.DictReader(f))
+        if not self.rows:
+            raise RuntimeError(f"Manifest is empty: {manifest_csv}")
+
+    def __len__(self):
+        return len(self.rows)
+
+    def _json(self, row: dict, key: str, default):
+        raw = row.get(key, "")
+        if raw == "":
+            return default
+        return json.loads(raw)
+
+    def _resolve_path(self, path: str) -> str:
+        if os.path.isabs(path):
+            return path
+        return os.path.join(self.root, path)
+
+    def _load_path(self, path: str) -> torch.Tensor:
+        sig = load_das_mat(
+            self._resolve_path(path),
+            use_diff=self.use_diff,
+            norm_mode="amp",
+            amp_range=self.amp_range,
+            smooth_kernel=self.smooth_kernel,
+        )
+        return crop_or_pad(sig, self.chunk_size, random_crop=False)
+
+    def __getitem__(self, index):
+        row = self.rows[index]
+        source_paths = self._json(row, "source_paths", [])
+        labels = [int(v) for v in self._json(row, "labels", [])]
+        gains = [float(v) for v in self._json(row, "gains", [1.0 for _ in source_paths])]
+        shifts = [int(v) for v in self._json(row, "shifts", [0 for _ in source_paths])]
+        spatial_params = self._json(row, "spatial_params", [{} for _ in source_paths])
+        n_src = int(row.get("n_src", len(source_paths)))
+        if n_src <= 0 or n_src > self.max_sources:
+            raise ValueError(f"Invalid n_src={n_src} in manifest row {index}")
+        refs, out_labels = [], []
+        for src_idx, path in enumerate(source_paths[:n_src]):
+            sig = self._load_path(path)
+            sig = shift_zero(sig, shifts[src_idx] if src_idx < len(shifts) else 0)
+            sig = sig * (gains[src_idx] if src_idx < len(gains) else 1.0)
+            if src_idx < len(spatial_params):
+                sig = apply_spatial_mix_params(sig, spatial_params[src_idx])
+            refs.append(sig)
+            out_labels.append(labels[src_idx] if src_idx < len(labels) else EMPTY_LABEL)
+        while len(refs) < self.max_sources:
+            refs.append(torch.zeros_like(refs[0]))
+            out_labels.append(EMPTY_LABEL)
+        refs = torch.stack(refs, dim=0)
+        mix = refs[:n_src].sum(dim=0)
+        bg_path = row.get("background_path", "")
+        if bg_path:
+            bg = self._load_path(bg_path)
+            snr_db = float(row.get("background_snr_db", "30.0"))
+            scale = torch.sqrt(mix.pow(2).mean() / (10.0 ** (snr_db / 10.0)) / (bg.pow(2).mean() + 1e-8))
+            mix = mix + bg * scale
         scale = self.amp_range / (mix.abs().max() + 1e-8)
         return {
             "mix": (mix * scale).float(),
@@ -333,3 +510,27 @@ def make_das_mix_dataloader(
         dataset,
         **loader_kwargs,
     )
+
+
+def make_das_manifest_dataloader(
+    root: str,
+    manifest_csv: str,
+    batch_size=8,
+    num_workers=4,
+    pin_memory: bool | None = None,
+    persistent_workers: bool | None = None,
+    prefetch_factor: int | None = None,
+    **kwargs,
+):
+    dataset = DASManifestMixDataset(root=root, manifest_csv=manifest_csv, **kwargs)
+    loader_kwargs = {
+        "batch_size": batch_size,
+        "shuffle": False,
+        "num_workers": num_workers,
+        "pin_memory": torch.cuda.is_available() if pin_memory is None else pin_memory,
+        "drop_last": False,
+        "persistent_workers": (num_workers > 0) if persistent_workers is None else persistent_workers,
+    }
+    if num_workers > 0 and prefetch_factor is not None:
+        loader_kwargs["prefetch_factor"] = prefetch_factor
+    return DataLoader(dataset, **loader_kwargs)

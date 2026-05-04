@@ -105,6 +105,37 @@ class DASSpatialStem(nn.Module):
         return x + self.net(x)
 
 
+class DASSpatialStem2D(nn.Module):
+    """2D time-channel stem for local DAS propagation patterns."""
+
+    def __init__(self, channels: int = 12, depth: int = 2, dropout: float = 0.0):
+        super().__init__()
+        hidden = max(channels * 2, 16)
+        blocks = [
+            nn.Conv2d(1, hidden, kernel_size=(9, 3), padding=(4, 1), bias=False),
+            nn.BatchNorm2d(hidden),
+            nn.SiLU(inplace=True),
+        ]
+        for _ in range(depth):
+            blocks.extend(
+                [
+                    nn.Conv2d(hidden, hidden, kernel_size=(7, 3), padding=(3, 1), groups=hidden, bias=False),
+                    nn.Conv2d(hidden, hidden, kernel_size=1, bias=False),
+                    nn.BatchNorm2d(hidden),
+                    nn.SiLU(inplace=True),
+                    nn.Dropout2d(dropout) if dropout > 0 else nn.Identity(),
+                ]
+            )
+        blocks.append(nn.Conv2d(hidden, 1, kernel_size=1, bias=False))
+        self.net = nn.Sequential(*blocks)
+        nn.init.zeros_(self.net[-1].weight)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        y = x.transpose(1, 2).unsqueeze(1)
+        y = self.net(y).squeeze(1).transpose(1, 2)
+        return x + y
+
+
 class DASMCConvTasNet(nn.Module):
     def __init__(
         self,
@@ -123,6 +154,7 @@ class DASMCConvTasNet(nn.Module):
         dropout=0.05,
         use_encoder_relu=True,
         spatial_stem=True,
+        spatial_stem_type="1d",
         spatial_depth=2,
         mixture_consistency=False,
     ):
@@ -137,7 +169,15 @@ class DASMCConvTasNet(nn.Module):
         self.use_encoder_relu = use_encoder_relu
         self.mixture_consistency = mixture_consistency
 
-        self.spatial_stem = DASSpatialStem(in_channels, depth=spatial_depth, dropout=dropout) if spatial_stem else nn.Identity()
+        stem_type = str(spatial_stem_type).lower()
+        if not spatial_stem:
+            self.spatial_stem = nn.Identity()
+        elif stem_type in {"1d", "conv1d"}:
+            self.spatial_stem = DASSpatialStem(in_channels, depth=spatial_depth, dropout=dropout)
+        elif stem_type in {"2d", "conv2d"}:
+            self.spatial_stem = DASSpatialStem2D(in_channels, depth=spatial_depth, dropout=dropout)
+        else:
+            raise ValueError("spatial_stem_type must be 1d or 2d")
         self.encoder = nn.Conv1d(in_channels, N, kernel_size=L, stride=L // 2, bias=False)
         self.layer_norm = select_norm("cln", N)
         self.bottleneck = nn.Conv1d(N, B, 1, bias=False)
